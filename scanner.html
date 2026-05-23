@@ -50,6 +50,7 @@
             border-radius: 8px;
             background-color: #334155;
             font-size: 1.2rem;
+            transition: background-color 0.3s;
         }
         .btn-register {
             margin-top: 15px;
@@ -84,6 +85,10 @@
         let currentMode = 'scan'; 
         let targetStudentId = '';
         let faceDescriptorsDB = []; 
+        
+        // ตัวแปรสำหรับป้องกันข้อความเด้งรัวๆ เมื่อแช่หน้ากล้อง
+        let lastMatchedId = '';
+        let matchTimeout = null;
 
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('mode') === 'register') {
@@ -93,7 +98,6 @@
         }
 
         async function loadModels() {
-            // ใช้ Model จาก CDN ที่เสถียร
             const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
             try {
                 await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
@@ -203,17 +207,32 @@
                     const drawBox = new faceapi.draw.DrawBox(box, { label: match.toString() });
                     drawBox.draw(overlay);
 
-                    if (match.label !== 'unknown' && window.opener) {
-                        window.opener.postMessage({
-                            action: 'faceMatched',
-                            studentId: match.label
-                        }, '*');
+                    if (match.label !== 'unknown') {
+                        if (window.opener) {
+                            window.opener.postMessage({
+                                action: 'faceMatched',
+                                studentId: match.label
+                            }, '*');
+                        }
+                        
+                        // แสดงข้อความความสำเร็จแบบไม่ให้กะพริบ
+                        if (lastMatchedId !== match.label) {
+                            lastMatchedId = match.label;
+                            statusMsg.innerText = `✅ สแกนสำเร็จ: รหัส ${match.label}`;
+                            statusMsg.style.backgroundColor = '#15803d'; // เปลี่ยนเป็นสีเขียว
+                            
+                            clearTimeout(matchTimeout);
+                            matchTimeout = setTimeout(() => {
+                                statusMsg.innerText = 'กำลังสแกนใบหน้า...';
+                                statusMsg.style.backgroundColor = '#0369a1'; // กลับเป็นสีน้ำเงิน
+                                lastMatchedId = ''; 
+                            }, 2500); // แสดงข้อความค้างไว้ 2.5 วินาที
+                        }
                     }
                 });
             }, 1000); 
         }
 
-        // รอให้โหลดหน้าเว็บเสร็จก่อน แล้วตรวจสอบว่าหน้าเว็บดึงไลบรารี faceapi มาได้ครบถ้วนหรือไม่
         window.addEventListener('DOMContentLoaded', () => {
             if (typeof faceapi === 'undefined') {
                 statusMsg.innerText = 'โหลดไลบรารี AI ไม่สำเร็จ (CORS/Network Error) กรุณารีเฟรชหน้าเว็บ';
