@@ -2,80 +2,280 @@
 <html lang="th">
 <head>
     <meta charset="UTF-8">
-    <title>ระบบสแกนใบหน้า</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>กล้องสแกนใบหน้า</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600&display=swap" rel="stylesheet">
+    
     <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+    
     <style>
-        body { font-family: 'Kanit', sans-serif; background: #1e293b; color: white; text-align: center; padding: 20px; }
-        #camera-container { position: relative; width: 100%; max-width: 500px; margin: 0 auto; border: 4px solid #3b82f6; border-radius: 12px; overflow: hidden; }
-        #videoElement { width: 100%; display: block; transform: scaleX(-1); }
-        .status { margin-top: 20px; padding: 15px; border-radius: 8px; background-color: #334155; font-size: 1.1rem; }
+        body {
+            font-family: 'Sarabun', sans-serif;
+            background-color: #1e293b;
+            color: white;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        #camera-container {
+            position: relative;
+            width: 100%;
+            max-width: 500px;
+            border: 4px solid #3b82f6;
+            border-radius: 12px;
+            background-color: #0f172a;
+            overflow: hidden;
+        }
+        #videoElement {
+            width: 100%;
+            display: block;
+            transform: scaleX(-1);
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px 20px;
+            border-radius: 8px;
+            background-color: #334155;
+            font-size: 1.2rem;
+            transition: background-color 0.3s;
+        }
+        .btn-register {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            display: none;
+        }
     </style>
 </head>
 <body>
-    <h2>ระบบ AI สแกนใบหน้า</h2>
+
+    <h2 id="pageTitle">ระบบ AI สแกนใบหน้า</h2>
     <div id="camera-container">
         <video id="videoElement" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
     </div>
-    <div id="statusMessage" class="status">เริ่มโหลดระบบ...</div>
+    
+    <div id="statusMessage" class="status">กำลังโหลดโมเดล AI... (อาจใช้เวลาสักครู่)</div>
+    <button id="btnCapture" class="btn-register" onclick="captureAndRegister()">📸 บันทึกใบหน้านี้</button>
 
     <script>
         const video = document.getElementById('videoElement');
+        const overlay = document.getElementById('overlay');
         const statusMsg = document.getElementById('statusMessage');
-        let faceDescriptorsDB = [];
+        const btnCapture = document.getElementById('btnCapture');
+        
+        let currentMode = 'scan'; 
+        let targetStudentId = '';
+        let faceDescriptorsDB = []; 
+        
+        // ตัวแปรสำหรับป้องกันข้อความเด้งรัวๆ และป้องกันการใช้รูปภาพ
+        let lastMatchedId = '';
+        let matchTimeout = null;
+        let hasBlinked = false;
+        const nameMap = new Map(); // เก็บชื่อนักเรียน
 
-        async function init() {
-            statusMsg.innerText = "กำลังโหลดโมเดล AI...";
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('mode') === 'register') {
+            currentMode = 'register';
+            targetStudentId = urlParams.get('studentId');
+            document.getElementById('pageTitle').innerText = `ลงทะเบียนใบหน้า: รหัส ${targetStudentId}`;
+        }
+
+        async function loadModels() {
+            const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
             try {
-                const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
                 await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
                 await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
                 await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-                
-                statusMsg.innerText = "โหลด AI เสร็จสิ้น กำลังเปิดกล้อง...";
+                statusMsg.innerText = 'โหลด AI สำเร็จ กำลังเปิดกล้อง...';
+                statusMsg.style.backgroundColor = '#0369a1';
+                startCamera();
+            } catch (err) {
+                statusMsg.innerText = 'เกิดข้อผิดพลาดในการโหลดโมเดล: ' + err.message;
+                statusMsg.style.backgroundColor = '#b91c1c';
+            }
+        }
+
+        async function startCamera() {
+            try {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
                 video.srcObject = stream;
-            } catch (e) {
-                statusMsg.innerText = "Error: " + e.message;
+            } catch (err) {
+                statusMsg.innerText = 'ไม่สามารถเข้าถึงกล้องได้: ' + err.message;
+                statusMsg.style.backgroundColor = '#b91c1c';
             }
         }
 
-        // เมื่อกล้องเปิดแล้ว ให้ส่งสัญญาณบอกหน้าหลักว่า "พร้อมรับข้อมูล"
         video.addEventListener('play', () => {
-            statusMsg.innerText = "กำลังเชื่อมต่อกับหน้าเช็คชื่อ...";
-            if (window.opener) {
-                window.opener.postMessage({ action: 'scannerReady' }, '*');
+            statusMsg.innerText = currentMode === 'register' ? 'กรุณามองกล้องให้ชัดเจน แล้วกดปุ่มบันทึก' : 'กำลังเตรียมระบบสแกน...';
+            statusMsg.style.backgroundColor = '#0369a1';
+            
+            const displaySize = { width: video.videoWidth, height: video.videoHeight };
+            faceapi.matchDimensions(overlay, displaySize);
+
+            if (currentMode === 'register') {
+                btnCapture.style.display = 'block';
             } else {
-                statusMsg.innerText = "Error: ไม่พบหน้าต่างหลัก";
-            }
-        });
+                window.addEventListener('message', (event) => {
+                    if (event.data && event.data.action === 'loadFaceData') {
+                        statusMsg.innerText = 'กำลังสแกนใบหน้า...';
+                        
+                        // นำชื่อนักเรียนมาเก็บใน Map 
+                        event.data.faces.forEach(f => {
+                            if (f.studentName) nameMap.set(f.studentId, f.studentName);
+                        });
 
-        // รับข้อมูลนักเรียนจากหน้าหลัก
-        window.addEventListener('message', (event) => {
-            if (event.data && event.data.action === 'loadFaceData') {
-                statusMsg.innerText = `ได้รับข้อมูลนักเรียน ${event.data.faces.length} คน กำลังเริ่มสแกน...`;
-                faceDescriptorsDB = event.data.faces.map(f => new faceapi.LabeledFaceDescriptors(f.studentId, [new Float32Array(Object.values(f.descriptor))]));
-                startScan();
-            }
-        });
-
-        async function startScan() {
-            const faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, 0.55);
-            setInterval(async () => {
-                const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
-                if (!detection) return;
-                
-                const match = faceMatcher.findBestMatch(detection.descriptor);
-                if (match.label !== 'unknown') {
-                    if (window.opener) {
-                        window.opener.postMessage({ action: 'faceMatched', studentId: match.label }, '*');
+                        faceDescriptorsDB = event.data.faces.map(f => {
+                            return new faceapi.LabeledFaceDescriptors(
+                                f.studentId,
+                                [new Float32Array(Object.values(f.descriptor))]
+                            );
+                        });
+                        startContinuousScan(displaySize);
                     }
-                    statusMsg.innerText = "✅ สแกนสำเร็จ: " + match.label;
-                    statusMsg.style.backgroundColor = "#15803d";
-                }
-            }, 1000);
+                });
+                if (window.opener) window.opener.postMessage({ action: 'scannerReady' }, '*');
+            }
+        });
+
+        async function captureAndRegister() {
+            statusMsg.innerText = 'กำลังประมวลผลใบหน้า...';
+            statusMsg.style.backgroundColor = '#ca8a04';
+            btnCapture.disabled = true;
+
+            // ตรวจจับ 1 ใบหน้า ใช้ .withFaceDescriptor()
+            const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+                                           .withFaceLandmarks()
+                                           .withFaceDescriptor(); 
+            
+            if (!detection) {
+                statusMsg.innerText = 'ไม่พบใบหน้า กรุณาขยับหน้าให้อยู่ในกรอบ หรือเพิ่มแสงสว่าง';
+                statusMsg.style.backgroundColor = '#b91c1c';
+                btnCapture.disabled = false;
+                return;
+            }
+
+            const descriptorArray = Array.from(detection.descriptor);
+            
+            if (window.opener && !window.opener.closed) {
+                window.opener.postMessage({
+                    action: 'faceRegistered',
+                    studentId: targetStudentId,
+                    descriptor: descriptorArray
+                }, '*');
+                
+                statusMsg.innerText = 'บันทึกใบหน้าสำเร็จ! กำลังปิดหน้าต่าง...';
+                statusMsg.style.backgroundColor = '#15803d';
+                setTimeout(() => window.close(), 1500);
+            } else {
+                statusMsg.innerText = 'ไม่พบการเชื่อมต่อกับระบบหลัก';
+                statusMsg.style.backgroundColor = '#b91c1c';
+            }
         }
 
-        init();
+        async function startContinuousScan(displaySize) {
+            if (faceDescriptorsDB.length === 0) {
+                statusMsg.innerText = 'ยังไม่มีข้อมูลใบหน้าในระบบของห้องนี้';
+                statusMsg.style.backgroundColor = '#b91c1c';
+                return;
+            }
+
+            const faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, 0.55); 
+            
+            setInterval(async () => {
+                // ตรวจจับหลายใบหน้า ใช้ .withFaceDescriptors()
+                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                                                .withFaceLandmarks()
+                                                .withFaceDescriptors();
+                
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                const ctx = overlay.getContext('2d');
+                ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+                if (detections.length === 0) {
+                    hasBlinked = false; // ถ้านักเรียนเดินออกไปแล้ว ให้รีเซ็ตค่า
+                }
+                
+                resizedDetections.forEach(detection => {
+                    const match = faceMatcher.findBestMatch(detection.descriptor);
+                    const studentName = nameMap.get(match.label) || match.label;
+                    
+                    // วาดกรอบสี่เหลี่ยม (แสดงชื่อแทนรหัส)
+                    const box = detection.detection.box;
+                    const drawBox = new faceapi.draw.DrawBox(box, { label: match.label !== 'unknown' ? studentName : 'Unknown' });
+                    drawBox.draw(overlay);
+
+                    // Liveness Detection (ตรวจสอบการกระพริบตา)
+                    const landmarks = detection.landmarks;
+                    const leftEye = landmarks.getLeftEye();
+                    // คำนวณความกว้าง/ความสูงของตา
+                    const eyeHeight = Math.abs(leftEye[1].y - leftEye[4].y); 
+                    if (eyeHeight < 2.5) { // ตาหรี่ลง (กระพริบตา)
+                        hasBlinked = true;
+                    }
+
+                    if (match.label !== 'unknown') {
+                        if (hasBlinked) {
+                            // ถ้าหน้าตรงกัน และกระพริบตาแล้ว -> ถือว่าผ่าน!
+                            if (window.opener) {
+                                window.opener.postMessage({
+                                    action: 'faceMatched',
+                                    studentId: match.label
+                                }, '*');
+                            }
+                            
+                            // แสดงข้อความสแกนสำเร็จ
+                            if (lastMatchedId !== match.label) {
+                                lastMatchedId = match.label;
+                                statusMsg.innerText = `✅ สแกนสำเร็จ: ${studentName}`;
+                                statusMsg.style.backgroundColor = '#15803d'; 
+                                
+                                clearTimeout(matchTimeout);
+                                matchTimeout = setTimeout(() => {
+                                    statusMsg.innerText = 'กำลังสแกนใบหน้า...';
+                                    statusMsg.style.backgroundColor = '#0369a1'; 
+                                    lastMatchedId = ''; 
+                                    hasBlinked = false; // รีเซ็ตให้นักเรียนคนต่อไป
+                                }, 2500); 
+                            }
+                        } else {
+                            // ถ้าหน้าตรงกัน แต่ "ยังไม่กระพริบตา" (อาจเป็นรูปภาพ) ให้แจ้งเตือน
+                            if (lastMatchedId !== match.label) {
+                                statusMsg.innerText = `📸 พบคุณ ${studentName} กรุณากระพริบตายืนยัน...`;
+                                statusMsg.style.backgroundColor = '#ca8a04'; // สีเหลืองเตือน
+                            }
+                        }
+                    }
+                });
+            }, 1000); 
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            if (typeof faceapi === 'undefined') {
+                statusMsg.innerText = 'โหลดไลบรารี AI ไม่สำเร็จ (CORS/Network Error) กรุณารีเฟรชหน้าเว็บ';
+                statusMsg.style.backgroundColor = '#b91c1c';
+            } else {
+                loadModels();
+            }
+        });
     </script>
 </body>
 </html>
