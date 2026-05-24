@@ -81,6 +81,7 @@
         const overlay = document.getElementById('overlay');
         const statusMsg = document.getElementById('statusMessage');
         const btnCapture = document.getElementById('btnCapture');
+        const nameMap = new Map();
         
         let currentMode = 'scan'; 
         let targetStudentId = '';
@@ -132,18 +133,22 @@
             if (currentMode === 'register') {
                 btnCapture.style.display = 'block';
             } else {
-                window.addEventListener('message', (event) => {
-                    if (event.data && event.data.action === 'loadFaceData') {
-                        statusMsg.innerText = 'กำลังสแกนใบหน้า...';
-                        faceDescriptorsDB = event.data.faces.map(f => {
-                            return new faceapi.LabeledFaceDescriptors(
-                                f.studentId,
-                                [new Float32Array(Object.values(f.descriptor))]
-                            );
-                        });
-                        startContinuousScan(displaySize);
-                    }
-                });
+                                    window.addEventListener('message', (event) => {
+                        if (event.data && event.data.action === 'loadFaceData') {
+                            statusMsg.innerText = 'กำลังสแกนใบหน้า...';
+                            
+                            // เก็บชื่อลง Map
+                            event.data.faces.forEach(f => nameMap.set(f.studentId, f.studentName));
+                            
+                            faceDescriptorsDB = event.data.faces.map(f => {
+                                return new faceapi.LabeledFaceDescriptors(
+                                    f.studentId,
+                                    [new Float32Array(Object.values(f.descriptor))]
+                                );
+                            });
+                            startContinuousScan(displaySize);
+                        }
+                    });
                 if (window.opener) window.opener.postMessage({ action: 'scannerReady' }, '*');
             }
         });
@@ -207,7 +212,7 @@
                     const drawBox = new faceapi.draw.DrawBox(box, { label: match.toString() });
                     drawBox.draw(overlay);
 
-                    if (match.label !== 'unknown') {
+                                    if (match.label !== 'unknown') {
                         if (window.opener) {
                             window.opener.postMessage({
                                 action: 'faceMatched',
@@ -215,18 +220,21 @@
                             }, '*');
                         }
                         
-                        // แสดงข้อความความสำเร็จแบบไม่ให้กะพริบ
+                        // ค้นหาชื่อจาก Map ที่เราเตรียมไว้
+                        const name = nameMap.get(match.label) || "ไม่พบชื่อ";
+                
                         if (lastMatchedId !== match.label) {
                             lastMatchedId = match.label;
-                            statusMsg.innerText = `✅ สแกนสำเร็จ: รหัส ${match.label}`;
-                            statusMsg.style.backgroundColor = '#15803d'; // เปลี่ยนเป็นสีเขียว
+                            // แสดงชื่อนักเรียนที่นี่!
+                            statusMsg.innerText = `✅ ${name}`; 
+                            statusMsg.style.backgroundColor = '#15803d'; 
                             
                             clearTimeout(matchTimeout);
                             matchTimeout = setTimeout(() => {
                                 statusMsg.innerText = 'กำลังสแกนใบหน้า...';
-                                statusMsg.style.backgroundColor = '#0369a1'; // กลับเป็นสีน้ำเงิน
+                                statusMsg.style.backgroundColor = '#0369a1';
                                 lastMatchedId = ''; 
-                            }, 2500); // แสดงข้อความค้างไว้ 2.5 วินาที
+                            }, 2500);
                         }
                     }
                 });
