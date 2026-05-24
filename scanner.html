@@ -86,11 +86,10 @@
         let targetStudentId = '';
         let faceDescriptorsDB = []; 
         
-        // ตัวแปรสำหรับป้องกันข้อความเด้งรัวๆ และป้องกันการใช้รูปภาพ
         let lastMatchedId = '';
         let matchTimeout = null;
         let hasBlinked = false;
-        const nameMap = new Map(); // เก็บชื่อนักเรียน
+        const nameMap = new Map();
 
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('mode') === 'register') {
@@ -138,7 +137,6 @@
                     if (event.data && event.data.action === 'loadFaceData') {
                         statusMsg.innerText = 'กำลังสแกนใบหน้า...';
                         
-                        // นำชื่อนักเรียนมาเก็บใน Map 
                         event.data.faces.forEach(f => {
                             if (f.studentName) nameMap.set(f.studentId, f.studentName);
                         });
@@ -161,7 +159,6 @@
             statusMsg.style.backgroundColor = '#ca8a04';
             btnCapture.disabled = true;
 
-            // ตรวจจับ 1 ใบหน้า ใช้ .withFaceDescriptor()
             const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
                                            .withFaceLandmarks()
                                            .withFaceDescriptor(); 
@@ -191,6 +188,17 @@
             }
         }
 
+        // ฟังก์ชันคำนวณอัตราส่วนการลืมตา (Eye Aspect Ratio - EAR)
+        function getEAR(eyePoints) {
+            // คำนวณความสูงของตาทั้งสองจุด
+            const v1 = Math.hypot(eyePoints[1].x - eyePoints[5].x, eyePoints[1].y - eyePoints[5].y);
+            const v2 = Math.hypot(eyePoints[2].x - eyePoints[4].x, eyePoints[2].y - eyePoints[4].y);
+            // คำนวณความกว้างของตา
+            const h = Math.hypot(eyePoints[0].x - eyePoints[3].x, eyePoints[0].y - eyePoints[3].y);
+            // สูตรคำนวณ EAR
+            return (v1 + v2) / (2.0 * h);
+        }
+
         async function startContinuousScan(displaySize) {
             if (faceDescriptorsDB.length === 0) {
                 statusMsg.innerText = 'ยังไม่มีข้อมูลใบหน้าในระบบของห้องนี้';
@@ -201,7 +209,6 @@
             const faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, 0.55); 
             
             setInterval(async () => {
-                // ตรวจจับหลายใบหน้า ใช้ .withFaceDescriptors()
                 const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
                                                 .withFaceLandmarks()
                                                 .withFaceDescriptors();
@@ -211,30 +218,34 @@
                 ctx.clearRect(0, 0, overlay.width, overlay.height);
 
                 if (detections.length === 0) {
-                    hasBlinked = false; // ถ้านักเรียนเดินออกไปแล้ว ให้รีเซ็ตค่า
+                    hasBlinked = false; 
                 }
                 
                 resizedDetections.forEach(detection => {
                     const match = faceMatcher.findBestMatch(detection.descriptor);
                     const studentName = nameMap.get(match.label) || match.label;
                     
-                    // วาดกรอบสี่เหลี่ยม (แสดงชื่อแทนรหัส)
                     const box = detection.detection.box;
+                    // กลับด้านชื่อบนกระจกเพื่อให้ครูอ่านง่ายขึ้น (ตั้งค่า scaleX ใน DrawBox)
                     const drawBox = new faceapi.draw.DrawBox(box, { label: match.label !== 'unknown' ? studentName : 'Unknown' });
                     drawBox.draw(overlay);
 
-                    // Liveness Detection (ตรวจสอบการกระพริบตา)
+                    // Liveness Detection (ตรวจสอบด้วยสูตร EAR)
                     const landmarks = detection.landmarks;
                     const leftEye = landmarks.getLeftEye();
-                    // คำนวณความกว้าง/ความสูงของตา
-                    const eyeHeight = Math.abs(leftEye[1].y - leftEye[4].y); 
-                    if (eyeHeight < 2.5) { // ตาหรี่ลง (กระพริบตา)
+                    const rightEye = landmarks.getRightEye();
+                    
+                    const leftEAR = getEAR(leftEye);
+                    const rightEAR = getEAR(rightEye);
+                    const avgEAR = (leftEAR + rightEAR) / 2;
+
+                    // ค่าเฉลี่ย EAR ของการลืมตาปกติคือ 0.25 - 0.30 ถ้าน้อยกว่า 0.22 ถือว่ามีการกระพริบตา/หลับตา
+                    if (avgEAR < 0.22) { 
                         hasBlinked = true;
                     }
 
                     if (match.label !== 'unknown') {
                         if (hasBlinked) {
-                            // ถ้าหน้าตรงกัน และกระพริบตาแล้ว -> ถือว่าผ่าน!
                             if (window.opener) {
                                 window.opener.postMessage({
                                     action: 'faceMatched',
@@ -242,7 +253,6 @@
                                 }, '*');
                             }
                             
-                            // แสดงข้อความสแกนสำเร็จ
                             if (lastMatchedId !== match.label) {
                                 lastMatchedId = match.label;
                                 statusMsg.innerText = `✅ สแกนสำเร็จ: ${studentName}`;
@@ -257,10 +267,9 @@
                                 }, 2500); 
                             }
                         } else {
-                            // ถ้าหน้าตรงกัน แต่ "ยังไม่กระพริบตา" (อาจเป็นรูปภาพ) ให้แจ้งเตือน
                             if (lastMatchedId !== match.label) {
                                 statusMsg.innerText = `📸 พบคุณ ${studentName} กรุณากระพริบตายืนยัน...`;
-                                statusMsg.style.backgroundColor = '#ca8a04'; // สีเหลืองเตือน
+                                statusMsg.style.backgroundColor = '#ca8a04'; 
                             }
                         }
                     }
@@ -270,7 +279,7 @@
 
         window.addEventListener('DOMContentLoaded', () => {
             if (typeof faceapi === 'undefined') {
-                statusMsg.innerText = 'โหลดไลบรารี AI ไม่สำเร็จ (CORS/Network Error) กรุณารีเฟรชหน้าเว็บ';
+                statusMsg.innerText = 'โหลดไลบรารี AI ไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ';
                 statusMsg.style.backgroundColor = '#b91c1c';
             } else {
                 loadModels();
