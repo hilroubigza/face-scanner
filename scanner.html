@@ -34,7 +34,7 @@
         #videoElement {
             width: 100%;
             display: block;
-            transform: scaleX(-1);
+            transform: scaleX(-1); /* สลับซ้ายขวาให้เป็นกระจก */
         }
         #overlay {
             position: absolute;
@@ -42,7 +42,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            transform: scaleX(-1);
+            transform: scaleX(-1); /* สลับ Canvas ให้ตรงกับวิดีโอ */
         }
         .status {
             margin-top: 20px;
@@ -188,14 +188,11 @@
             }
         }
 
-        // ฟังก์ชันคำนวณอัตราส่วนการลืมตา (Eye Aspect Ratio - EAR)
+        // สูตรคำนวณอัตราส่วนการลืมตา (EAR)
         function getEAR(eyePoints) {
-            // คำนวณความสูงของตาทั้งสองจุด
             const v1 = Math.hypot(eyePoints[1].x - eyePoints[5].x, eyePoints[1].y - eyePoints[5].y);
             const v2 = Math.hypot(eyePoints[2].x - eyePoints[4].x, eyePoints[2].y - eyePoints[4].y);
-            // คำนวณความกว้างของตา
             const h = Math.hypot(eyePoints[0].x - eyePoints[3].x, eyePoints[0].y - eyePoints[3].y);
-            // สูตรคำนวณ EAR
             return (v1 + v2) / (2.0 * h);
         }
 
@@ -208,73 +205,100 @@
 
             const faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, 0.55); 
             
+            let isDetecting = false; // ป้องกันการคำนวณซ้อนทับกัน
+
+            // *** แก้ไข: ลดเวลาจาก 1000ms เหลือ 200ms เพื่อจับภาพการกระพริบตาให้ทัน! ***
             setInterval(async () => {
-                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
-                                                .withFaceLandmarks()
-                                                .withFaceDescriptors();
-                
-                const resizedDetections = faceapi.resizeResults(detections, displaySize);
-                const ctx = overlay.getContext('2d');
-                ctx.clearRect(0, 0, overlay.width, overlay.height);
+                if (isDetecting) return;
+                isDetecting = true;
 
-                if (detections.length === 0) {
-                    hasBlinked = false; 
-                }
-                
-                resizedDetections.forEach(detection => {
-                    const match = faceMatcher.findBestMatch(detection.descriptor);
-                    const studentName = nameMap.get(match.label) || match.label;
+                try {
+                    const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                                                    .withFaceLandmarks()
+                                                    .withFaceDescriptors();
                     
-                    const box = detection.detection.box;
-                    // กลับด้านชื่อบนกระจกเพื่อให้ครูอ่านง่ายขึ้น (ตั้งค่า scaleX ใน DrawBox)
-                    const drawBox = new faceapi.draw.DrawBox(box, { label: match.label !== 'unknown' ? studentName : 'Unknown' });
-                    drawBox.draw(overlay);
+                    const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                    const ctx = overlay.getContext('2d');
+                    ctx.clearRect(0, 0, overlay.width, overlay.height);
 
-                    // Liveness Detection (ตรวจสอบด้วยสูตร EAR)
-                    const landmarks = detection.landmarks;
-                    const leftEye = landmarks.getLeftEye();
-                    const rightEye = landmarks.getRightEye();
-                    
-                    const leftEAR = getEAR(leftEye);
-                    const rightEAR = getEAR(rightEye);
-                    const avgEAR = (leftEAR + rightEAR) / 2;
-
-                    // ค่าเฉลี่ย EAR ของการลืมตาปกติคือ 0.25 - 0.30 ถ้าน้อยกว่า 0.22 ถือว่ามีการกระพริบตา/หลับตา
-                    if (avgEAR < 0.22) { 
-                        hasBlinked = true;
+                    if (detections.length === 0) {
+                        hasBlinked = false; 
                     }
+                    
+                    resizedDetections.forEach(detection => {
+                        const match = faceMatcher.findBestMatch(detection.descriptor);
+                        const studentName = nameMap.get(match.label) || match.label;
+                        const displayLabel = match.label !== 'unknown' ? studentName : 'Unknown';
+                        
+                        const box = detection.detection.box;
 
-                    if (match.label !== 'unknown') {
-                        if (hasBlinked) {
-                            if (window.opener) {
-                                window.opener.postMessage({
-                                    action: 'faceMatched',
-                                    studentId: match.label
-                                }, '*');
-                            }
-                            
-                            if (lastMatchedId !== match.label) {
-                                lastMatchedId = match.label;
-                                statusMsg.innerText = `✅ สแกนสำเร็จ: ${studentName}`;
-                                statusMsg.style.backgroundColor = '#15803d'; 
+                        // *** แก้ไข: วาดกล่องเปล่าๆ ซ่อนชื่อที่กลับด้านเอาไว้ ***
+                        const drawBox = new faceapi.draw.DrawBox(box, { label: '' }); 
+                        drawBox.draw(overlay);
+
+                        // *** แก้ไข: วาดชื่อเองแบบพลิกกลับให้อ่านได้ปกติ ***
+                        ctx.save();
+                        ctx.scale(-1, 1); // พลิกแกน X เพื่อแก้ผลจาก scaleX(-1) ใน CSS
+                        ctx.font = 'bold 16px Sarabun';
+                        const textWidth = ctx.measureText(displayLabel).width;
+                        const padding = 4;
+                        // คำนวณพิกัดใหม่บนแกนที่โดนพลิกกลับ
+                        const flipX = -box.x - box.width; 
+                        
+                        ctx.fillStyle = 'rgba(37, 99, 235, 0.9)'; // สีพื้นหลังป้ายชื่อ
+                        ctx.fillRect(flipX, box.y - 24, textWidth + (padding * 2), 24);
+                        ctx.fillStyle = '#ffffff'; // สีตัวอักษร
+                        ctx.fillText(displayLabel, flipX + padding, box.y - 6);
+                        ctx.restore();
+
+                        // Liveness Detection (ตรวจสอบการกระพริบตา)
+                        const landmarks = detection.landmarks;
+                        const leftEye = landmarks.getLeftEye();
+                        const rightEye = landmarks.getRightEye();
+                        
+                        const leftEAR = getEAR(leftEye);
+                        const rightEAR = getEAR(rightEye);
+                        const avgEAR = (leftEAR + rightEAR) / 2;
+
+                        // ปรับค่าเป็น 0.26 ให้จับการกระพริบตาง่ายขึ้น (ไม่ต้องหลับตาแน่นก็จับได้)
+                        if (avgEAR < 0.26) { 
+                            hasBlinked = true;
+                        }
+
+                        if (match.label !== 'unknown') {
+                            if (hasBlinked) {
+                                if (window.opener) {
+                                    window.opener.postMessage({
+                                        action: 'faceMatched',
+                                        studentId: match.label
+                                    }, '*');
+                                }
                                 
-                                clearTimeout(matchTimeout);
-                                matchTimeout = setTimeout(() => {
-                                    statusMsg.innerText = 'กำลังสแกนใบหน้า...';
-                                    statusMsg.style.backgroundColor = '#0369a1'; 
-                                    lastMatchedId = ''; 
-                                    hasBlinked = false; // รีเซ็ตให้นักเรียนคนต่อไป
-                                }, 2500); 
-                            }
-                        } else {
-                            if (lastMatchedId !== match.label) {
-                                statusMsg.innerText = `📸 พบคุณ ${studentName} กรุณากระพริบตายืนยัน...`;
-                                statusMsg.style.backgroundColor = '#ca8a04'; 
+                                if (lastMatchedId !== match.label) {
+                                    lastMatchedId = match.label;
+                                    statusMsg.innerText = `✅ สแกนสำเร็จ: ${studentName}`;
+                                    statusMsg.style.backgroundColor = '#15803d'; 
+                                    
+                                    clearTimeout(matchTimeout);
+                                    matchTimeout = setTimeout(() => {
+                                        statusMsg.innerText = 'กำลังสแกนใบหน้า...';
+                                        statusMsg.style.backgroundColor = '#0369a1'; 
+                                        lastMatchedId = ''; 
+                                        hasBlinked = false; // รีเซ็ตให้นักเรียนคนต่อไป
+                                    }, 2500); 
+                                }
+                            } else {
+                                if (lastMatchedId !== match.label) {
+                                    statusMsg.innerText = `📸 พบคุณ ${studentName} กรุณากระพริบตายืนยัน...`;
+                                    statusMsg.style.backgroundColor = '#ca8a04'; 
+                                }
                             }
                         }
-                    }
-                });
-            }, 1000); 
+                    });
+                } finally {
+                    isDetecting = false; // ปลดล็อคให้รอบถัดไปทำงานได้
+                }
+            }, 200); // <-- ความเร็วอยู่ที่นี่ (ตรวจจับทุกๆ 0.2 วินาที)
         }
 
         window.addEventListener('DOMContentLoaded', () => {
