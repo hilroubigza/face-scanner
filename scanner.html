@@ -9,14 +9,21 @@
     <style>
         body { font-family: 'Sarabun', sans-serif; background-color: #1e293b; color: white; text-align: center; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
         #camera-container { position: relative; width: 100%; max-width: 500px; border: 4px solid #3b82f6; border-radius: 12px; background-color: #0f172a; overflow: hidden; }
-        #videoElement { width: 100%; display: block; transform: scaleX(-1); /* ค่าเริ่มต้นคือกล้องหน้า ให้เป็นกระจก */ }
-        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        .status { margin-top: 20px; padding: 10px 20px; border-radius: 8px; background-color: #0369a1; font-size: 1.2rem; transition: background-color 0.3s; }
-        .btn-register { margin-top: 15px; padding: 10px 20px; background: #10b981; color: white; border: none; border-radius: 8px; font-size: 1.1rem; cursor: pointer; display: none; }
         
-        /* สไตล์สำหรับปุ่มสลับกล้อง */
-        .btn-switch { margin-top: 15px; padding: 10px 20px; background: #475569; color: white; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; transition: background-color 0.2s; }
-        .btn-switch:hover { background: #64748b; }
+        /* สไตล์พื้นฐานของวิดีโอและ Canvas */
+        #videoElement { width: 100%; display: block; transform: scaleX(-1); }
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+        
+        .status { margin-top: 20px; padding: 10px 20px; border-radius: 8px; background-color: #0369a1; font-size: 1.2rem; transition: background-color 0.3s; width: 100%; max-width: 500px; box-sizing: border-box;}
+        
+        /* จัดกลุ่มปุ่มให้อยู่ด้วยกัน */
+        .action-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 15px; flex-wrap: wrap; width: 100%; max-width: 500px;}
+        
+        .btn { padding: 12px 20px; color: white; border: none; border-radius: 8px; font-size: 1.1rem; cursor: pointer; transition: background-color 0.2s; flex-grow: 1; font-family: 'Sarabun', sans-serif;}
+        .btn-register { background: #10b981; display: none; }
+        .btn-register:hover { background: #059669; }
+        .btn-switch { background: #475569; }
+        .btn-switch:hover { background: #334155; }
     </style>
 </head>
 <body>
@@ -29,8 +36,10 @@
     
     <div id="statusMessage" class="status">กำลังโหลดระบบ...</div>
     
-    <button id="btnSwitch" class="btn-switch" onclick="switchCamera()">🔄 สลับกล้อง (หน้า/หลัง)</button>
-    <button id="btnCapture" class="btn-register" onclick="captureAndRegister()">📸 บันทึกใบหน้านี้</button>
+    <div class="action-buttons">
+        <button id="btnSwitch" class="btn btn-switch" onclick="switchCamera()">🔄 สลับกล้อง (หน้า/หลัง)</button>
+        <button id="btnCapture" class="btn btn-register" onclick="captureAndRegister()">📸 บันทึกใบหน้านี้</button>
+    </div>
 
     <script>
         const video = document.getElementById('videoElement');
@@ -46,14 +55,15 @@
         const nameMap = new Map();
 
         // ตัวแปรสำหรับจัดการกล้อง
-        let currentFacingMode = 'user'; // 'user' = กล้องหน้า, 'environment' = กล้องหลัง
-        let isPlayEventAttached = false; // ป้องกัน Event ทำงานซ้ำซ้อนตอนสลับกล้อง
+        let currentFacingMode = 'user'; // เริ่มต้นที่กล้องหน้า
+        let isPlayEventAttached = false; 
 
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('mode') === 'register') {
             currentMode = 'register';
             targetStudentId = urlParams.get('studentId');
             document.getElementById('pageTitle').innerText = `ลงทะเบียนใบหน้า: รหัส ${targetStudentId}`;
+            btnCapture.style.display = 'block'; // แสดงปุ่มบันทึกในโหมด Register
         }
 
         async function loadModels() {
@@ -71,7 +81,6 @@
 
         async function startCamera() {
             try {
-                // ปิดกล้องเก่าก่อนเปิดกล้องใหม่ (กรณีสลับกล้อง)
                 if (video.srcObject) {
                     video.srcObject.getTracks().forEach(track => track.stop());
                 }
@@ -81,11 +90,13 @@
                 });
                 video.srcObject = stream;
 
-                // จัดการการสะท้อนกระจก: กล้องหน้าให้กลับซ้ายขวา กล้องหลังให้แสดงปกติ
+                // จัดการการสะท้อนกระจก: กล้องหน้าให้กลับซ้ายขวา กล้องหลังให้ปกติ
                 if (currentFacingMode === 'user') {
                     video.style.transform = 'scaleX(-1)';
+                    overlay.style.transform = 'scaleX(-1)';
                 } else {
                     video.style.transform = 'scaleX(1)';
+                    overlay.style.transform = 'scaleX(1)';
                 }
 
             } catch (err) {
@@ -93,9 +104,7 @@
             }
         }
 
-        // ฟังก์ชันสำหรับปุ่มสลับกล้อง
         function switchCamera() {
-            // สลับโหมด
             currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
             startCamera();
         }
@@ -104,13 +113,13 @@
             const displaySize = { width: video.videoWidth, height: video.videoHeight };
             faceapi.matchDimensions(overlay, displaySize);
 
-            // ใช้ isPlayEventAttached เช็คเพื่อไม่ให้ผูก Event ซ้ำเวลาสลับกล้อง
             if (!isPlayEventAttached) {
                 isPlayEventAttached = true;
                 
                 if (currentMode === 'register') {
-                    btnCapture.style.display = 'block';
+                    statusMsg.innerText = 'กรุณามองกล้องให้ชัดเจน แล้วกดปุ่มบันทึก';
                 } else {
+                    statusMsg.innerText = 'กำลังเตรียมระบบสแกน...';
                     window.addEventListener('message', (event) => {
                         if (event.data && event.data.action === 'loadFaceData') {
                             event.data.faces.forEach(f => nameMap.set(f.studentId, f.studentName));
@@ -125,38 +134,93 @@
 
         async function captureAndRegister() {
             btnCapture.disabled = true;
+            statusMsg.innerText = 'กำลังประมวลผลใบหน้า...';
+            statusMsg.style.backgroundColor = '#ca8a04';
+            
             const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
-            if (!detection) { statusMsg.innerText = 'ไม่พบใบหน้า'; btnCapture.disabled = false; return; }
+            if (!detection) { 
+                statusMsg.innerText = 'ไม่พบใบหน้า กรุณาให้หน้าอยู่ในกรอบและมีแสงสว่าง'; 
+                statusMsg.style.backgroundColor = '#b91c1c';
+                btnCapture.disabled = false; 
+                return; 
+            }
             window.opener.postMessage({ action: 'faceRegistered', studentId: targetStudentId, descriptor: Array.from(detection.descriptor) }, '*');
-            statusMsg.innerText = 'บันทึกเรียบร้อย!';
+            statusMsg.innerText = 'บันทึกเรียบร้อย! กำลังปิดหน้าต่าง...';
+            statusMsg.style.backgroundColor = '#15803d';
             setTimeout(() => window.close(), 1500);
         }
 
         async function startScan(displaySize) {
             const faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, 0.55); 
             statusMsg.innerText = 'กำลังสแกนใบหน้า...';
-            
+            let isDetecting = false;
+
             setInterval(async () => {
-                const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
-                if (!detection) return;
-                
-                const match = faceMatcher.findBestMatch(detection.descriptor);
-                if (match.label !== 'unknown') {
-                    if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: match.label }, '*');
+                if (isDetecting) return;
+                isDetecting = true;
+
+                try {
+                    const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptors();
+                    const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                    const ctx = overlay.getContext('2d');
+                    ctx.clearRect(0, 0, overlay.width, overlay.height);
                     
-                    if (lastMatchedId !== match.label) {
-                        lastMatchedId = match.label;
+                    resizedDetections.forEach(detection => {
+                        const match = faceMatcher.findBestMatch(detection.descriptor);
                         const studentName = nameMap.get(match.label) || match.label;
-                        statusMsg.innerText = `✅ สแกนสำเร็จ: ${studentName}`;
-                        statusMsg.style.backgroundColor = '#15803d';
-                        clearTimeout(matchTimeout);
-                        matchTimeout = setTimeout(() => { statusMsg.innerText = 'กำลังสแกน...'; statusMsg.style.backgroundColor = '#0369a1'; lastMatchedId = ''; }, 2000);
-                    }
+                        const displayLabel = match.label !== 'unknown' ? studentName : 'Unknown';
+                        
+                        const box = detection.detection.box;
+
+                        // วาดกรอบและชื่อให้ถูกต้องตามโหมดกล้อง (พลิกกลับถ้าเป็นกล้องหน้า)
+                        if (currentFacingMode === 'user') {
+                            const drawBox = new faceapi.draw.DrawBox(box, { label: '' }); 
+                            drawBox.draw(overlay);
+                            
+                            ctx.save();
+                            ctx.scale(-1, 1); 
+                            ctx.font = 'bold 16px Sarabun';
+                            const textWidth = ctx.measureText(displayLabel).width;
+                            const padding = 4;
+                            const flipX = -box.x - box.width; 
+                            
+                            ctx.fillStyle = 'rgba(37, 99, 235, 0.9)'; 
+                            ctx.fillRect(flipX, box.y - 24, textWidth + (padding * 2), 24);
+                            ctx.fillStyle = '#ffffff'; 
+                            ctx.fillText(displayLabel, flipX + padding, box.y - 6);
+                            ctx.restore();
+                        } else {
+                            // กล้องหลังวาดปกติได้เลย
+                            const drawBox = new faceapi.draw.DrawBox(box, { label: displayLabel }); 
+                            drawBox.draw(overlay);
+                        }
+
+                        if (match.label !== 'unknown') {
+                            if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: match.label }, '*');
+                            
+                            if (lastMatchedId !== match.label) {
+                                lastMatchedId = match.label;
+                                statusMsg.innerText = `✅ สแกนสำเร็จ: ${studentName}`;
+                                statusMsg.style.backgroundColor = '#15803d';
+                                clearTimeout(matchTimeout);
+                                matchTimeout = setTimeout(() => { statusMsg.innerText = 'กำลังสแกน...'; statusMsg.style.backgroundColor = '#0369a1'; lastMatchedId = ''; }, 2000);
+                            }
+                        }
+                    });
+                } finally {
+                    isDetecting = false; 
                 }
-            }, 300); // ตรวจสอบทุก 300ms เพื่อความลื่นไหล
+            }, 300); 
         }
 
-        window.addEventListener('DOMContentLoaded', loadModels);
+        window.addEventListener('DOMContentLoaded', () => {
+            if (typeof faceapi === 'undefined') {
+                statusMsg.innerText = 'โหลดไลบรารี AI ไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ';
+                statusMsg.style.backgroundColor = '#b91c1c';
+            } else {
+                loadModels();
+            }
+        });
     </script>
 </body>
 </html>
