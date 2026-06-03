@@ -3,20 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>กล้องสแกนใบหน้า</title>
+    <title>กล้องสแกนใบหน้า & QR Code</title>
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600&display=swap" rel="stylesheet">
+    
     <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    
     <style>
         body { font-family: 'Sarabun', sans-serif; background-color: #1e293b; color: white; text-align: center; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
         #camera-container { position: relative; width: 100%; max-width: 500px; border: 4px solid #3b82f6; border-radius: 12px; background-color: #0f172a; overflow: hidden; }
-        
         #videoElement { width: 100%; display: block; transform: scaleX(-1); }
         #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
-        
         .status { margin-top: 20px; padding: 10px 20px; border-radius: 8px; background-color: #0369a1; font-size: 1.2rem; transition: background-color 0.3s; width: 100%; max-width: 500px; box-sizing: border-box;}
-        
         .action-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 15px; flex-wrap: wrap; width: 100%; max-width: 500px;}
-        
         .btn { padding: 12px 20px; color: white; border: none; border-radius: 8px; font-size: 1.1rem; cursor: pointer; transition: background-color 0.2s; flex-grow: 1; font-family: 'Sarabun', sans-serif;}
         .btn-register { background: #10b981; display: none; }
         .btn-register:hover { background: #059669; }
@@ -26,13 +25,13 @@
 </head>
 <body>
 
-    <h2 id="pageTitle">ระบบ AI สแกนใบหน้า</h2>
+    <h2 id="pageTitle">ระบบสแกนใบหน้า & QR Code</h2>
     <div id="camera-container">
         <video id="videoElement" autoplay muted playsinline></video>
         <canvas id="overlay"></canvas>
     </div>
     
-    <div id="statusMessage" class="status">กำลังโหลดระบบ...</div>
+    <div id="statusMessage" class="status">กำลังโหลดระบบความแม่นยำสูง...</div>
     
     <div class="action-buttons">
         <button id="btnSwitch" class="btn btn-switch" onclick="switchCamera()">🔄 สลับกล้อง (หน้า/หลัง)</button>
@@ -40,12 +39,6 @@
     </div>
 
     <script>
-        // ------------------------------------------------------------------------
-        // ตั้งค่าความแม่นยำของ AI ตรงนี้ (MATCH_THRESHOLD)
-        // 0.35 = เข้มงวดมาก (หน้าต้องเป๊ะ แสงต้องเหมือนตอนลงทะเบียน)
-        // 0.42 = แนะนำ (สมดุลระหว่างความแม่นยำและการสแกนติดง่าย)
-        // 0.55 = หละหลวม (สแกนติดง่ายมาก แต่อาจจะผิดคน)
-        // ------------------------------------------------------------------------
         const MATCH_THRESHOLD = 0.42; 
 
         const video = document.getElementById('videoElement');
@@ -62,6 +55,10 @@
 
         let currentFacingMode = 'user'; 
         let isPlayEventAttached = false; 
+        
+        // Canvas ซ่อนสำหรับให้ระบบ QR Code อ่านค่า
+        const offscreenCanvas = document.createElement('canvas');
+        const offCtx = offscreenCanvas.getContext('2d');
 
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('mode') === 'register') {
@@ -74,7 +71,7 @@
         async function loadModels() {
             const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
             try {
-                await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+                await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
                 await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
                 await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
                 statusMsg.innerText = 'โหลด AI สำเร็จ กำลังเปิดกล้อง...';
@@ -89,10 +86,7 @@
                 if (video.srcObject) {
                     video.srcObject.getTracks().forEach(track => track.stop());
                 }
-
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: currentFacingMode } 
-                });
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode } });
                 video.srcObject = stream;
 
                 if (currentFacingMode === 'user') {
@@ -102,7 +96,6 @@
                     video.style.transform = 'scaleX(1)';
                     overlay.style.transform = 'scaleX(1)';
                 }
-
             } catch (err) {
                 statusMsg.innerText = 'ไม่สามารถเข้าถึงกล้องได้: ' + err.message;
             }
@@ -116,6 +109,10 @@
         video.addEventListener('play', () => {
             const displaySize = { width: video.videoWidth, height: video.videoHeight };
             faceapi.matchDimensions(overlay, displaySize);
+            
+            // ปรับขนาด Canvas ซ่อนให้ตรงกับวิดีโอ
+            offscreenCanvas.width = video.videoWidth;
+            offscreenCanvas.height = video.videoHeight;
 
             if (!isPlayEventAttached) {
                 isPlayEventAttached = true;
@@ -123,7 +120,7 @@
                 if (currentMode === 'register') {
                     statusMsg.innerText = 'กรุณามองกล้องให้ชัดเจน แล้วกดปุ่มบันทึก';
                 } else {
-                    statusMsg.innerText = 'กำลังเตรียมระบบสแกน...';
+                    statusMsg.innerText = 'สแกนใบหน้า หรือ QR Code...';
                     window.addEventListener('message', (event) => {
                         if (event.data && event.data.action === 'loadFaceData') {
                             event.data.faces.forEach(f => nameMap.set(f.studentId, f.studentName));
@@ -141,7 +138,9 @@
             statusMsg.innerText = 'กำลังประมวลผลใบหน้า...';
             statusMsg.style.backgroundColor = '#ca8a04';
             
-            const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+            const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+            const detection = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceDescriptor();
+            
             if (!detection) { 
                 statusMsg.innerText = 'ไม่พบใบหน้า กรุณาให้หน้าอยู่ในกรอบและมีแสงสว่าง'; 
                 statusMsg.style.backgroundColor = '#b91c1c';
@@ -155,9 +154,8 @@
         }
 
         async function startScan(displaySize) {
-            // ปรับค่าความเข้มงวดการแมตช์หน้าผ่านตัวแปร MATCH_THRESHOLD
             const faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, MATCH_THRESHOLD); 
-            statusMsg.innerText = 'กำลังสแกนใบหน้า...';
+            statusMsg.innerText = 'สแกนใบหน้า หรือ QR Code...';
             let isDetecting = false;
 
             setInterval(async () => {
@@ -165,7 +163,40 @@
                 isDetecting = true;
 
                 try {
-                    const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptors();
+                    // ----------------------------------------------------
+                    // 1. ระบบตรวจจับ QR Code (ทำงานเร็วมาก)
+                    // ----------------------------------------------------
+                    offCtx.drawImage(video, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+                    const imageData = offCtx.getImageData(0, 0, offscreenCanvas.width, offscreenCanvas.height);
+                    const qrCode = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+
+                    if (qrCode) {
+                        const scannedId = qrCode.data.trim();
+                        const studentName = nameMap.get(scannedId);
+                        
+                        if (studentName) {
+                            // ส่งข้อมูลให้หน้าหลักเช็คชื่อ (ใช้คำสั่งเดียวกับใบหน้า เพื่อความต่อเนื่อง)
+                            if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: scannedId }, '*');
+                            
+                            if (lastMatchedId !== scannedId) {
+                                lastMatchedId = scannedId;
+                                statusMsg.innerText = `✅ QR Code สำเร็จ: ${studentName}`;
+                                statusMsg.style.backgroundColor = '#15803d';
+                                
+                                clearTimeout(matchTimeout);
+                                matchTimeout = setTimeout(() => { statusMsg.innerText = 'สแกนใบหน้า หรือ QR Code...'; statusMsg.style.backgroundColor = '#0369a1'; lastMatchedId = ''; }, 2000);
+                            }
+                            isDetecting = false;
+                            return; // ถ้าเจอ QR แล้ว ข้ามการสแกนใบหน้าไปเลยเพื่อให้เร็วขึ้น
+                        }
+                    }
+
+                    // ----------------------------------------------------
+                    // 2. ระบบตรวจจับใบหน้า (ทำงานคู่กัน)
+                    // ----------------------------------------------------
+                    const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+                    const detections = await faceapi.detectAllFaces(video, options).withFaceLandmarks().withFaceDescriptors();
+                    
                     const resizedDetections = faceapi.resizeResults(detections, displaySize);
                     const ctx = overlay.getContext('2d');
                     ctx.clearRect(0, 0, overlay.width, overlay.height);
@@ -180,18 +211,10 @@
                         if (currentFacingMode === 'user') {
                             const drawBox = new faceapi.draw.DrawBox(box, { label: '' }); 
                             drawBox.draw(overlay);
-                            
-                            ctx.save();
-                            ctx.scale(-1, 1); 
-                            ctx.font = 'bold 16px Sarabun';
-                            const textWidth = ctx.measureText(displayLabel).width;
-                            const padding = 4;
-                            const flipX = -box.x - box.width; 
-                            
-                            ctx.fillStyle = 'rgba(37, 99, 235, 0.9)'; 
-                            ctx.fillRect(flipX, box.y - 24, textWidth + (padding * 2), 24);
-                            ctx.fillStyle = '#ffffff'; 
-                            ctx.fillText(displayLabel, flipX + padding, box.y - 6);
+                            ctx.save(); ctx.scale(-1, 1); ctx.font = 'bold 16px Sarabun';
+                            const textWidth = ctx.measureText(displayLabel).width; const padding = 4; const flipX = -box.x - box.width; 
+                            ctx.fillStyle = 'rgba(37, 99, 235, 0.9)'; ctx.fillRect(flipX, box.y - 24, textWidth + (padding * 2), 24);
+                            ctx.fillStyle = '#ffffff'; ctx.fillText(displayLabel, flipX + padding, box.y - 6);
                             ctx.restore();
                         } else {
                             const drawBox = new faceapi.draw.DrawBox(box, { label: displayLabel }); 
@@ -200,13 +223,12 @@
 
                         if (match.label !== 'unknown') {
                             if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: match.label }, '*');
-                            
                             if (lastMatchedId !== match.label) {
                                 lastMatchedId = match.label;
-                                statusMsg.innerText = `✅ สแกนสำเร็จ: ${studentName}`;
+                                statusMsg.innerText = `✅ สแกนใบหน้าสำเร็จ: ${studentName}`;
                                 statusMsg.style.backgroundColor = '#15803d';
                                 clearTimeout(matchTimeout);
-                                matchTimeout = setTimeout(() => { statusMsg.innerText = 'กำลังสแกน...'; statusMsg.style.backgroundColor = '#0369a1'; lastMatchedId = ''; }, 2000);
+                                matchTimeout = setTimeout(() => { statusMsg.innerText = 'สแกนใบหน้า หรือ QR Code...'; statusMsg.style.backgroundColor = '#0369a1'; lastMatchedId = ''; }, 2000);
                             }
                         }
                     });
