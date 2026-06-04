@@ -56,9 +56,8 @@
         let currentFacingMode = 'user'; 
         let isPlayEventAttached = false; 
         
-        // Canvas ซ่อนสำหรับให้ระบบ QR Code อ่านค่า
         const offscreenCanvas = document.createElement('canvas');
-        const offCtx = offscreenCanvas.getContext('2d');
+        const offCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
 
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('mode') === 'register') {
@@ -86,7 +85,15 @@
                 if (video.srcObject) {
                     video.srcObject.getTracks().forEach(track => track.stop());
                 }
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode } });
+                
+                // บังคับขอความละเอียด HD เพื่อให้สแกน QR โค้ดได้คมชัดขึ้น
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: currentFacingMode,
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    } 
+                });
                 video.srcObject = stream;
 
                 if (currentFacingMode === 'user') {
@@ -110,7 +117,6 @@
             const displaySize = { width: video.videoWidth, height: video.videoHeight };
             faceapi.matchDimensions(overlay, displaySize);
             
-            // ปรับขนาด Canvas ซ่อนให้ตรงกับวิดีโอ
             offscreenCanvas.width = video.videoWidth;
             offscreenCanvas.height = video.videoHeight;
 
@@ -163,19 +169,20 @@
                 isDetecting = true;
 
                 try {
-                    // ----------------------------------------------------
-                    // 1. ระบบตรวจจับ QR Code (ทำงานเร็วมาก)
-                    // ----------------------------------------------------
+                    // 1. ระบบตรวจจับ QR Code
                     offCtx.drawImage(video, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
                     const imageData = offCtx.getImageData(0, 0, offscreenCanvas.width, offscreenCanvas.height);
-                    const qrCode = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+                    
+                    // ปรับ options ให้พยายามอ่านค่าในสภาพแสงที่ซับซ้อน (เพิ่มความแม่นยำ)
+                    const qrCode = jsQR(imageData.data, imageData.width, imageData.height, { 
+                        inversionAttempts: "attemptBoth" 
+                    });
 
                     if (qrCode) {
                         const scannedId = qrCode.data.trim();
                         const studentName = nameMap.get(scannedId);
                         
                         if (studentName) {
-                            // ส่งข้อมูลให้หน้าหลักเช็คชื่อ (ใช้คำสั่งเดียวกับใบหน้า เพื่อความต่อเนื่อง)
                             if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: scannedId }, '*');
                             
                             if (lastMatchedId !== scannedId) {
@@ -187,13 +194,11 @@
                                 matchTimeout = setTimeout(() => { statusMsg.innerText = 'สแกนใบหน้า หรือ QR Code...'; statusMsg.style.backgroundColor = '#0369a1'; lastMatchedId = ''; }, 2000);
                             }
                             isDetecting = false;
-                            return; // ถ้าเจอ QR แล้ว ข้ามการสแกนใบหน้าไปเลยเพื่อให้เร็วขึ้น
+                            return; 
                         }
                     }
 
-                    // ----------------------------------------------------
-                    // 2. ระบบตรวจจับใบหน้า (ทำงานคู่กัน)
-                    // ----------------------------------------------------
+                    // 2. ระบบตรวจจับใบหน้า
                     const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
                     const detections = await faceapi.detectAllFaces(video, options).withFaceLandmarks().withFaceDescriptors();
                     
