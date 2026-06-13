@@ -86,7 +86,6 @@
                     video.srcObject.getTracks().forEach(track => track.stop());
                 }
                 
-                // บังคับขอความละเอียด HD เพื่อให้สแกน QR โค้ดได้คมชัดขึ้น
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { 
                         facingMode: currentFacingMode,
@@ -116,9 +115,6 @@
         video.addEventListener('play', () => {
             const displaySize = { width: video.videoWidth, height: video.videoHeight };
             faceapi.matchDimensions(overlay, displaySize);
-            
-            offscreenCanvas.width = video.videoWidth;
-            offscreenCanvas.height = video.videoHeight;
 
             if (!isPlayEventAttached) {
                 isPlayEventAttached = true;
@@ -160,7 +156,14 @@
         }
 
         async function startScan(displaySize) {
-            const faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, MATCH_THRESHOLD); 
+            let faceMatcher = null;
+            // ป้องกัน AI ค้างในกรณีที่ห้องนี้ยังไม่มีใครลงทะเบียนใบหน้าเลย
+            if (faceDescriptorsDB && faceDescriptorsDB.length > 0) {
+                try {
+                    faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, MATCH_THRESHOLD); 
+                } catch(e) { console.warn("FaceMatcher Error:", e); }
+            }
+            
             statusMsg.innerText = 'สแกนใบหน้า หรือ QR Code...';
             let isDetecting = false;
 
@@ -169,24 +172,25 @@
                 isDetecting = true;
 
                 try {
-                    // 1. ระบบตรวจจับ QR Code
-                    offCtx.drawImage(video, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
-                    const imageData = offCtx.getImageData(0, 0, offscreenCanvas.width, offscreenCanvas.height);
-                    
-                    // ปรับ options ให้พยายามอ่านค่าในสภาพแสงที่ซับซ้อน (เพิ่มความแม่นยำ)
-                    const qrCode = jsQR(imageData.data, imageData.width, imageData.height, { 
-                        inversionAttempts: "attemptBoth" 
-                    });
-
-                    if (qrCode) {
-                        const scannedId = qrCode.data.trim();
-                        const studentName = nameMap.get(scannedId);
+                    // 1. ระบบตรวจจับ QR Code (ทำงานเป็นอิสระ)
+                    if (video.videoWidth > 0 && video.videoHeight > 0) {
+                        offscreenCanvas.width = video.videoWidth;
+                        offscreenCanvas.height = video.videoHeight;
+                        offCtx.drawImage(video, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+                        const imageData = offCtx.getImageData(0, 0, offscreenCanvas.width, offscreenCanvas.height);
                         
-                        if (studentName) {
+                        const qrCode = jsQR(imageData.data, imageData.width, imageData.height, { 
+                            inversionAttempts: "attemptBoth" 
+                        });
+
+                        if (qrCode) {
+                            const scannedId = qrCode.data.trim();
+                            // สแกนเจอ QR ให้ส่งรหัสไปหน้า Index.html จัดการทันที โดยไม่สนว่าเคยถ่ายหน้าไว้หรือไม่
                             if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: scannedId }, '*');
                             
                             if (lastMatchedId !== scannedId) {
                                 lastMatchedId = scannedId;
+                                const studentName = nameMap.get(scannedId) || `รหัส ${scannedId}`;
                                 statusMsg.innerText = `✅ QR Code สำเร็จ: ${studentName}`;
                                 statusMsg.style.backgroundColor = '#15803d';
                                 
@@ -207,9 +211,16 @@
                     ctx.clearRect(0, 0, overlay.width, overlay.height);
                     
                     resizedDetections.forEach(detection => {
-                        const match = faceMatcher.findBestMatch(detection.descriptor);
-                        const studentName = nameMap.get(match.label) || match.label;
-                        const displayLabel = match.label !== 'unknown' ? studentName : 'Unknown';
+                        let matchLabel = 'unknown';
+                        
+                        // เทียบใบหน้าก็ต่อเมื่อมีข้อมูลใบหน้าในระบบแล้วเท่านั้น
+                        if (faceMatcher) {
+                            const match = faceMatcher.findBestMatch(detection.descriptor);
+                            matchLabel = match.label;
+                        }
+                        
+                        const studentName = nameMap.get(matchLabel) || matchLabel;
+                        const displayLabel = matchLabel !== 'unknown' ? studentName : 'Unknown';
                         
                         const box = detection.detection.box;
 
@@ -226,10 +237,10 @@
                             drawBox.draw(overlay);
                         }
 
-                        if (match.label !== 'unknown') {
-                            if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: match.label }, '*');
-                            if (lastMatchedId !== match.label) {
-                                lastMatchedId = match.label;
+                        if (matchLabel !== 'unknown') {
+                            if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: matchLabel }, '*');
+                            if (lastMatchedId !== matchLabel) {
+                                lastMatchedId = matchLabel;
                                 statusMsg.innerText = `✅ สแกนใบหน้าสำเร็จ: ${studentName}`;
                                 statusMsg.style.backgroundColor = '#15803d';
                                 clearTimeout(matchTimeout);
