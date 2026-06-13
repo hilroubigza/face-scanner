@@ -12,8 +12,8 @@
     <style>
         body { font-family: 'Sarabun', sans-serif; background-color: #1e293b; color: white; text-align: center; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
         #camera-container { position: relative; width: 100%; max-width: 500px; border: 4px solid #3b82f6; border-radius: 12px; background-color: #0f172a; overflow: hidden; }
-        #videoElement { width: 100%; display: block; }
-        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #videoElement { width: 100%; display: block; transform: scaleX(-1); }
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
         .status { margin-top: 20px; padding: 10px 20px; border-radius: 8px; background-color: #0369a1; font-size: 1.2rem; transition: background-color 0.3s; width: 100%; max-width: 500px; box-sizing: border-box;}
         .action-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 15px; flex-wrap: wrap; width: 100%; max-width: 500px;}
         .btn { padding: 12px 20px; color: white; border: none; border-radius: 8px; font-size: 1.1rem; cursor: pointer; transition: background-color 0.2s; flex-grow: 1; font-family: 'Sarabun', sans-serif;}
@@ -21,8 +21,6 @@
         .btn-register:hover { background: #059669; }
         .btn-switch { background: #475569; }
         .btn-switch:hover { background: #334155; }
-        .btn-close { background: #ef4444; }
-        .btn-close:hover { background: #dc2626; }
     </style>
 </head>
 <body>
@@ -36,9 +34,8 @@
     <div id="statusMessage" class="status">กำลังโหลดระบบความแม่นยำสูง...</div>
     
     <div class="action-buttons">
-        <button id="btnSwitch" class="btn btn-switch" onclick="switchCamera()">🔄 สลับกล้อง</button>
-        <button id="btnCapture" class="btn btn-register" onclick="captureAndRegister()">📸 บันทึกใบหน้า</button>
-        <button class="btn btn-close" onclick="closeScanner()">❌ ปิด / กลับ</button>
+        <button id="btnSwitch" class="btn btn-switch" onclick="switchCamera()">🔄 สลับกล้อง (หน้า/หลัง)</button>
+        <button id="btnCapture" class="btn btn-register" onclick="captureAndRegister()">📸 บันทึกใบหน้านี้</button>
     </div>
 
     <script>
@@ -56,6 +53,7 @@
         let matchTimeout = null;
         const nameMap = new Map();
 
+        let currentFacingMode = 'user'; 
         let isPlayEventAttached = false; 
         
         const offscreenCanvas = document.createElement('canvas');
@@ -67,19 +65,6 @@
             targetStudentId = urlParams.get('studentId');
             document.getElementById('pageTitle').innerText = `ลงทะเบียนใบหน้า: รหัส ${targetStudentId}`;
             btnCapture.style.display = 'block'; 
-        }
-
-        // ตั้งค่ากล้องเริ่มต้น: โหมดเช็คชื่อใช้กล้องหลัง (environment), โหมดลงทะเบียนใช้กล้องหน้า (user)
-        let currentFacingMode = (currentMode === 'register') ? 'user' : 'environment'; 
-
-        // ฟังก์ชันปิดหน้าต่างสแกน
-        function closeScanner() {
-            if (window.opener) {
-                window.close();
-            } else {
-                statusMsg.innerText = 'กรุณากดปิดแท็บนี้เพื่อกลับไปยังหน้าหลัก';
-                window.close();
-            }
         }
 
         async function loadModels() {
@@ -110,7 +95,6 @@
                 });
                 video.srcObject = stream;
 
-                // พลิกกล้องซ้าย-ขวาเฉพาะตอนใช้กล้องหน้า
                 if (currentFacingMode === 'user') {
                     video.style.transform = 'scaleX(-1)';
                     overlay.style.transform = 'scaleX(-1)';
@@ -131,6 +115,9 @@
         video.addEventListener('play', () => {
             const displaySize = { width: video.videoWidth, height: video.videoHeight };
             faceapi.matchDimensions(overlay, displaySize);
+            
+            offscreenCanvas.width = video.videoWidth;
+            offscreenCanvas.height = video.videoHeight;
 
             if (!isPlayEventAttached) {
                 isPlayEventAttached = true;
@@ -139,12 +126,11 @@
                     statusMsg.innerText = 'กรุณามองกล้องให้ชัดเจน แล้วกดปุ่มบันทึก';
                 } else {
                     if (!window.opener) {
-                        statusMsg.innerText = '⚠️ ขาดการเชื่อมต่อกับหน้าระบบหลัก';
+                        statusMsg.innerHTML = '⚠️ ขาดการเชื่อมต่อกับระบบหลัก<br><span style="font-size: 0.9rem; font-weight: normal;">(หากเปิดในแอป LINE ให้กดปุ่ม 3 จุดมุมขวาบน เลือก "เปิดในเบราว์เซอร์อื่น")</span>';
                         statusMsg.style.backgroundColor = '#b91c1c';
                     } else {
                         statusMsg.innerText = 'สแกนใบหน้า หรือ QR Code...';
                     }
-
                     window.addEventListener('message', (event) => {
                         if (event.data && event.data.action === 'loadFaceData') {
                             event.data.faces.forEach(f => nameMap.set(f.studentId, f.studentName));
@@ -171,9 +157,7 @@
                 btnCapture.disabled = false; 
                 return; 
             }
-            if (window.opener) {
-                window.opener.postMessage({ action: 'faceRegistered', studentId: targetStudentId, descriptor: Array.from(detection.descriptor) }, '*');
-            }
+            if (window.opener) window.opener.postMessage({ action: 'faceRegistered', studentId: targetStudentId, descriptor: Array.from(detection.descriptor) }, '*');
             statusMsg.innerText = 'บันทึกเรียบร้อย! กำลังปิดหน้าต่าง...';
             statusMsg.style.backgroundColor = '#15803d';
             setTimeout(() => window.close(), 1500);
@@ -186,7 +170,6 @@
                 catch(e) { console.warn("FaceMatcher Error:", e); }
             }
             
-            statusMsg.innerText = 'สแกนใบหน้า หรือ QR Code...';
             let isDetecting = false;
 
             setInterval(async () => {
@@ -194,7 +177,6 @@
                 isDetecting = true;
 
                 try {
-                    // 1. ระบบตรวจจับ QR Code
                     if (video.videoWidth > 0 && video.videoHeight > 0) {
                         offscreenCanvas.width = video.videoWidth;
                         offscreenCanvas.height = video.videoHeight;
@@ -223,7 +205,6 @@
                         }
                     }
 
-                    // 2. ระบบตรวจจับใบหน้า
                     const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
                     const detections = await faceapi.detectAllFaces(video, options).withFaceLandmarks().withFaceDescriptors();
                     
