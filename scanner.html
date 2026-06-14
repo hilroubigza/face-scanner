@@ -3,55 +3,99 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ระบบสแกน QR Code เช็คชื่อ</title>
+    <title>ระบบสแกนใบหน้า & QR Code</title>
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
         body { font-family: 'Sarabun', sans-serif; background-color: #1e293b; color: white; text-align: center; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; box-sizing: border-box; }
         #camera-container { position: relative; width: 100%; max-width: 400px; border: 4px solid #3b82f6; border-radius: 12px; background-color: #0f172a; overflow: hidden; }
         #v { width: 100%; display: block; }
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         .status { margin-top: 15px; padding: 12px; border-radius: 8px; background-color: #0369a1; font-size: 1.1rem; width: 100%; max-width: 400px; box-sizing: border-box; font-weight: bold; transition: background-color 0.3s; }
-        .action-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 15px; width: 100%; max-width: 400px; }
+        .action-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 15px; width: 100%; max-width: 400px; flex-wrap: wrap; }
         .btn { padding: 12px 20px; color: white; border: none; border-radius: 8px; font-size: 1.1rem; cursor: pointer; transition: background-color 0.2s; flex-grow: 1; font-family: 'Sarabun', sans-serif; font-weight: bold; }
         .btn-close { background: #ef4444; }
         .btn-close:hover { background: #dc2626; }
+        .btn-register { background: #10b981; display: none; }
+        .btn-switch { background: #475569; }
     </style>
 </head>
 <body>
 
-    <h2>ระบบสแกน QR Code เช็คชื่อ</h2>
+    <h2 id="pageTitle">ระบบสแกนใบหน้า & QR Code</h2>
     <div id="camera-container">
         <video id="v" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
     </div>
     
     <div id="msg" class="status">กำลังเตรียมกล้องและระบบ AI...</div>
     
     <div class="action-buttons">
-        <button class="btn btn-close" onclick="window.close()">❌ ปิดหน้าต่างสแกน</button>
+        <button id="btnSwitch" class="btn btn-switch" onclick="switchCamera()">🔄 สลับกล้อง</button>
+        <button id="btnCapture" class="btn btn-register" onclick="captureAndRegister()">📸 บันทึกใบหน้านี้</button>
+        <button class="btn btn-close" onclick="window.close()">❌ ปิด / กลับ</button>
     </div>
 
-    <script {nonce}>
+    <script>
+        const MATCH_THRESHOLD = 0.42; 
         const v = document.getElementById('v');
+        const overlay = document.getElementById('overlay');
         const msg = document.getElementById('msg');
-        const nameMap = new Map();
+        const btnCapture = document.getElementById('btnCapture');
+        
+        let currentMode = 'scan'; 
+        let targetStudentId = '';
+        let faceDescriptorsDB = []; 
         let lastMatchedId = '';
         let matchTimeout = null;
+        const nameMap = new Map();
+
+        let isPlayEventAttached = false; 
+        
+        const offscreenCanvas = document.createElement('canvas');
+        const offCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('mode') === 'register') {
+            currentMode = 'register';
+            targetStudentId = urlParams.get('studentId');
+            document.getElementById('pageTitle').innerText = `ลงทะเบียนใบหน้า: รหัส ${targetStudentId}`;
+            btnCapture.style.display = 'block'; 
+        }
+
+        let currentFacingMode = (currentMode === 'register') ? 'user' : 'environment'; 
+
+        async function loadModels() {
+            const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+            try {
+                await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+                msg.innerText = 'โหลด AI สำเร็จ กำลังเปิดกล้อง...';
+                initCamera();
+            } catch (err) {
+                msg.innerText = 'เกิดข้อผิดพลาด: ' + err.message;
+                msg.style.backgroundColor = '#b91c1c';
+            }
+        }
 
         async function initCamera() {
             try {
-                // บังคับเปิดกล้องหลังเพื่อระยะโฟกัส QR Code ที่แม่นยำในมือถือ
+                if (v.srcObject) {
+                    v.srcObject.getTracks().forEach(track => track.stop());
+                }
                 const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } 
+                    video: { facingMode: currentFacingMode, width: { ideal: 1280 }, height: { ideal: 720 } } 
                 });
                 v.srcObject = stream;
                 
-                if (!window.opener) {
-                    msg.innerText = '⚠️ ขาดการเชื่อมต่อกับหน้าจอหลัก (กรุณาเปิดผ่านระบบเช็คชื่อ)';
-                    msg.style.backgroundColor = '#b91c1c';
+                if (currentFacingMode === 'user') {
+                    v.style.transform = 'scaleX(-1)';
+                    overlay.style.transform = 'scaleX(-1)';
                 } else {
-                    msg.innerText = 'เปิดกล้องสำเร็จ กำลังดึงรายชื่อนักเรียน...';
-                    // ส่งสัญญาณบอกหน้าจอหลัก (Index.html) ว่ากล้องพร้อมรับรายชื่อแล้ว
-                    window.opener.postMessage({ action: 'scannerReady' }, '*');
+                    v.style.transform = 'scaleX(1)';
+                    overlay.style.transform = 'scaleX(1)';
                 }
             } catch(e) { 
                 msg.innerText = 'ไม่สามารถเข้าถึงกล้องได้: ' + e.message; 
@@ -59,68 +103,186 @@
             }
         }
 
-        // ระบบรอรับฐานข้อมูลรายชื่อนักเรียนจากหน้าจอหลัก
-        window.addEventListener('message', (event) => {
-            if (event.data && event.data.action === 'loadFaceData') {
-                event.data.faces.forEach(f => nameMap.set(String(f.studentId).trim(), f.studentName));
-                msg.innerText = 'โหลดรายชื่อสำเร็จ ' + nameMap.size + ' คน พร้อมสแกน QR Code...';
-                msg.style.backgroundColor = '#0369a1';
+        function switchCamera() {
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+            initCamera();
+        }
+
+        v.addEventListener('play', () => {
+            const displaySize = { width: v.videoWidth, height: v.videoHeight };
+            faceapi.matchDimensions(overlay, displaySize);
+
+            if (!isPlayEventAttached) {
+                isPlayEventAttached = true;
                 
-                // เริ่มระบบลูปตรวจจับ QR Code
-                setInterval(scanQR, 400);
+                if (currentMode === 'register') {
+                    msg.innerText = 'กรุณามองกล้องให้ชัดเจน แล้วกดปุ่มบันทึก';
+                } else {
+                    if (!window.opener) {
+                        msg.innerHTML = '⚠️ ขาดการเชื่อมต่อกับระบบหลัก<br><span style="font-size: 0.9rem; font-weight: normal;">(หากเปิดในแอป LINE ให้เปิดในเบราว์เซอร์อื่น)</span>';
+                        msg.style.backgroundColor = '#b91c1c';
+                    } else {
+                        msg.innerText = 'สแกนใบหน้า หรือ QR Code...';
+                    }
+
+                    window.addEventListener('message', (event) => {
+                        if (event.data && event.data.action === 'loadFaceData') {
+                            const faces = event.data.faces;
+                            let faceCount = 0;
+                            
+                            faces.forEach(f => {
+                                // 1. เก็บชื่อทุกคนลง Map เพื่อให้สแกน QR ได้ (ถึงจะยังไม่มีใบหน้าก็ตาม)
+                                nameMap.set(String(f.studentId).trim(), f.studentName);
+                                
+                                // 2. เก็บข้อมูลใบหน้า เฉพาะคนที่มีข้อมูลแล้วเพื่อใช้ AI
+                                if (f.descriptor) {
+                                    faceDescriptorsDB.push(new faceapi.LabeledFaceDescriptors(f.studentId, [new Float32Array(Object.values(f.descriptor))]));
+                                    faceCount++;
+                                }
+                            });
+                            
+                            msg.innerText = `โหลดรายชื่อสำเร็จ ${faces.length} คน (มีใบหน้า ${faceCount} คน) พร้อมสแกน...`;
+                            msg.style.backgroundColor = '#0369a1';
+                            
+                            startScan(displaySize);
+                        }
+                    });
+                    if (window.opener) window.opener.postMessage({ action: 'scannerReady' }, '*');
+                }
             }
         });
 
-        function scanQR() {
-            if (v.videoWidth === 0 || v.videoHeight === 0) return;
+        async function captureAndRegister() {
+            btnCapture.disabled = true;
+            msg.innerText = 'กำลังประมวลผลใบหน้า...';
+            msg.style.backgroundColor = '#ca8a04';
             
-            const canvas = document.createElement('canvas');
-            canvas.width = v.videoWidth; 
-            canvas.height = v.videoHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(v, 0, 0);
+            const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+            const detection = await faceapi.detectSingleFace(v, options).withFaceLandmarks().withFaceDescriptor();
             
-            const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsQR(data.data, data.width, data.height, { inversionAttempts: "attemptBoth" });
-            
-            if (code) {
-                const scannedId = code.data.trim();
-                
-                // ป้องกันการสแกนซ้ำคนเดิมรัวๆ ในวินาทีเดียวกัน
-                if (lastMatchedId === scannedId) return;
-                
-                // ดึงรายชื่อนักเรียนจากรหัสที่สแกนพบ
-                const studentName = nameMap.get(scannedId);
-                
-                if (studentName) {
-                    lastMatchedId = scannedId;
-                    
-                    // 1. ส่งคำสั่งเช็คชื่อกลับไปที่ระบบหลักหลังบ้าน (Index.html)
-                    if(window.opener) {
-                        window.opener.postMessage({action: 'faceMatched', studentId: scannedId}, '*');
-                    }
-                    
-                    // 2. แสดงสถานะสีเขียวพร้อม "ชื่อ-นามสกุลนักเรียน" บนหน้าจอทันที
-                    msg.innerText = '✅ เช็คชื่อสำเร็จ: ' + studentName;
-                    msg.style.backgroundColor = '#15803d';
-                    
-                    // หน่วงเวลา 2 วินาที ก่อนเคลียร์หน้าจอเพื่อรับคนต่อไป
-                    clearTimeout(matchTimeout);
-                    matchTimeout = setTimeout(() => {
-                        msg.innerText = 'สแกน QR Code คนต่อไป...';
-                        msg.style.backgroundColor = '#0369a1';
-                        lastMatchedId = '';
-                    }, 2000);
-                } else {
-                    // กรณีสแกนเจอบัตร QR อื่นๆ ที่ไม่มีรหัสในห้องเรียนนี้
-                    msg.innerText = '❌ ไม่พบรหัส ' + scannedId + ' ในรายวิชานี้';
-                    msg.style.backgroundColor = '#b91c1c';
-                }
+            if (!detection) { 
+                msg.innerText = 'ไม่พบใบหน้า กรุณาให้หน้าอยู่ในกรอบและมีแสงสว่าง'; 
+                msg.style.backgroundColor = '#b91c1c';
+                btnCapture.disabled = false; 
+                return; 
             }
+            if (window.opener) {
+                window.opener.postMessage({ action: 'faceRegistered', studentId: targetStudentId, descriptor: Array.from(detection.descriptor) }, '*');
+            }
+            msg.innerText = 'บันทึกเรียบร้อย! กำลังปิดหน้าต่าง...';
+            msg.style.backgroundColor = '#15803d';
+            setTimeout(() => window.close(), 1500);
         }
 
-        // รันระบบกล้องทันทีที่เปิดหน้าเว็บ
-        initCamera();
+        async function startScan(displaySize) {
+            let faceMatcher = null;
+            if (faceDescriptorsDB && faceDescriptorsDB.length > 0) {
+                try { faceMatcher = new faceapi.FaceMatcher(faceDescriptorsDB, MATCH_THRESHOLD); } 
+                catch(e) { console.warn("FaceMatcher Error:", e); }
+            }
+            
+            let isDetecting = false;
+
+            setInterval(async () => {
+                if (isDetecting) return;
+                isDetecting = true;
+
+                try {
+                    // --- ระบบตรวจจับ QR Code ---
+                    if (v.videoWidth > 0 && v.videoHeight > 0) {
+                        offscreenCanvas.width = v.videoWidth;
+                        offscreenCanvas.height = v.videoHeight;
+                        offCtx.drawImage(v, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+                        const imageData = offCtx.getImageData(0, 0, offscreenCanvas.width, offscreenCanvas.height);
+                        
+                        const qrCode = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
+
+                        if (qrCode) {
+                            const scannedId = qrCode.data.trim();
+                            
+                            if (lastMatchedId !== scannedId) {
+                                const studentName = nameMap.get(scannedId);
+                                
+                                if (studentName) {
+                                    lastMatchedId = scannedId;
+                                    if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: scannedId }, '*');
+                                    
+                                    msg.innerText = `✅ เช็คชื่อสำเร็จ: ${studentName}`;
+                                    msg.style.backgroundColor = '#15803d';
+                                    
+                                    clearTimeout(matchTimeout);
+                                    matchTimeout = setTimeout(() => { msg.innerText = 'สแกนใบหน้า หรือ QR Code คนต่อไป...'; msg.style.backgroundColor = '#0369a1'; lastMatchedId = ''; }, 2000);
+                                } else {
+                                    msg.innerText = `❌ ไม่พบรหัส ${scannedId} ในรายวิชานี้`;
+                                    msg.style.backgroundColor = '#b91c1c';
+                                    clearTimeout(matchTimeout);
+                                    matchTimeout = setTimeout(() => { msg.innerText = 'สแกนใบหน้า หรือ QR Code คนต่อไป...'; msg.style.backgroundColor = '#0369a1'; }, 2000);
+                                }
+                            }
+                            isDetecting = false;
+                            return; 
+                        }
+                    }
+
+                    // --- ระบบตรวจจับใบหน้า ---
+                    const options = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+                    const detections = await faceapi.detectAllFaces(v, options).withFaceLandmarks().withFaceDescriptors();
+                    
+                    const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                    const ctx = overlay.getContext('2d');
+                    ctx.clearRect(0, 0, overlay.width, overlay.height);
+                    
+                    resizedDetections.forEach(detection => {
+                        let matchLabel = 'unknown';
+                        if (faceMatcher) {
+                            const match = faceMatcher.findBestMatch(detection.descriptor);
+                            matchLabel = match.label;
+                        }
+                        
+                        const studentName = nameMap.get(matchLabel) || matchLabel;
+                        const displayLabel = matchLabel !== 'unknown' ? studentName : 'Unknown';
+                        
+                        const box = detection.detection.box;
+
+                        if (currentFacingMode === 'user') {
+                            const drawBox = new faceapi.draw.DrawBox(box, { label: '' }); 
+                            drawBox.draw(overlay);
+                            ctx.save(); ctx.scale(-1, 1); ctx.font = 'bold 16px Sarabun';
+                            const textWidth = ctx.measureText(displayLabel).width; const padding = 4; const flipX = -box.x - box.width; 
+                            ctx.fillStyle = 'rgba(37, 99, 235, 0.9)'; ctx.fillRect(flipX, box.y - 24, textWidth + (padding * 2), 24);
+                            ctx.fillStyle = '#ffffff'; ctx.fillText(displayLabel, flipX + padding, box.y - 6);
+                            ctx.restore();
+                        } else {
+                            const drawBox = new faceapi.draw.DrawBox(box, { label: displayLabel }); 
+                            drawBox.draw(overlay);
+                        }
+
+                        if (matchLabel !== 'unknown') {
+                            if (lastMatchedId !== matchLabel) {
+                                lastMatchedId = matchLabel;
+                                if (window.opener) window.opener.postMessage({ action: 'faceMatched', studentId: matchLabel }, '*');
+                                
+                                msg.innerText = `✅ สแกนใบหน้าสำเร็จ: ${studentName}`;
+                                msg.style.backgroundColor = '#15803d';
+                                clearTimeout(matchTimeout);
+                                matchTimeout = setTimeout(() => { msg.innerText = 'สแกนใบหน้า หรือ QR Code คนต่อไป...'; msg.style.backgroundColor = '#0369a1'; lastMatchedId = ''; }, 2000);
+                            }
+                        }
+                    });
+                } finally {
+                    isDetecting = false; 
+                }
+            }, 300); 
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            if (typeof faceapi === 'undefined') {
+                msg.innerText = 'โหลดไลบรารี AI ไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ';
+                msg.style.backgroundColor = '#b91c1c';
+            } else {
+                loadModels();
+            }
+        });
     </script>
 </body>
 </html>
