@@ -3,52 +3,124 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scanner</title>
-    <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+    <title>ระบบสแกน QR Code เช็คชื่อ</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
-        body { font-family: sans-serif; background: #1e293b; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        #v { width: 90%; max-width: 400px; border: 3px solid #3b82f6; border-radius: 8px; }
-        #msg { margin-top: 15px; padding: 10px; background: #0369a1; border-radius: 5px; width: 90%; text-align: center; }
+        body { font-family: 'Sarabun', sans-serif; background-color: #1e293b; color: white; text-align: center; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; box-sizing: border-box; }
+        #camera-container { position: relative; width: 100%; max-width: 400px; border: 4px solid #3b82f6; border-radius: 12px; background-color: #0f172a; overflow: hidden; }
+        #v { width: 100%; display: block; }
+        .status { margin-top: 15px; padding: 12px; border-radius: 8px; background-color: #0369a1; font-size: 1.1rem; width: 100%; max-width: 400px; box-sizing: border-box; font-weight: bold; transition: background-color 0.3s; }
+        .action-buttons { display: flex; gap: 10px; justify-content: center; margin-top: 15px; width: 100%; max-width: 400px; }
+        .btn { padding: 12px 20px; color: white; border: none; border-radius: 8px; font-size: 1.1rem; cursor: pointer; transition: background-color 0.2s; flex-grow: 1; font-family: 'Sarabun', sans-serif; font-weight: bold; }
+        .btn-close { background: #ef4444; }
+        .btn-close:hover { background: #dc2626; }
     </style>
 </head>
 <body>
-    <video id="v" autoplay playsinline></video>
-    <div id="msg">กำลังเตรียมกล้องและ AI...</div>
 
-    <script>
+    <h2>ระบบสแกน QR Code เช็คชื่อ</h2>
+    <div id="camera-container">
+        <video id="v" autoplay muted playsinline></video>
+    </div>
+    
+    <div id="msg" class="status">กำลังเตรียมกล้องและระบบ AI...</div>
+    
+    <div class="action-buttons">
+        <button class="btn btn-close" onclick="window.close()">❌ ปิดหน้าต่างสแกน</button>
+    </div>
+
+    <script {nonce}>
         const v = document.getElementById('v');
         const msg = document.getElementById('msg');
-        
-        async function init() {
+        const nameMap = new Map();
+        let lastMatchedId = '';
+        let matchTimeout = null;
+
+        async function initCamera() {
             try {
-                // 1. เปิดกล้องก่อน
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                // บังคับเปิดกล้องหลังเพื่อระยะโฟกัส QR Code ที่แม่นยำในมือถือ
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } 
+                });
                 v.srcObject = stream;
-                msg.innerText = 'โหลด AI...';
-
-                // 2. โหลดโมเดล
-                await faceapi.nets.ssdMobilenetv1.loadFromUri('https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights');
-                msg.innerText = 'ระบบพร้อมใช้งาน!';
                 
-                // 3. เริ่มสแกน QR
-                setInterval(scanQR, 500);
-            } catch(e) { msg.innerText = 'Error: ' + e.message; }
-        }
-
-        function scanQR() {
-            const canvas = document.createElement('canvas');
-            canvas.width = v.videoWidth; canvas.height = v.videoHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(v, 0, 0);
-            const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsQR(data.data, data.width, data.height);
-            if (code) {
-                if(window.opener) window.opener.postMessage({action: 'faceMatched', studentId: code.data.trim()}, '*');
-                msg.innerText = 'พบ QR: ' + code.data;
+                if (!window.opener) {
+                    msg.innerText = '⚠️ ขาดการเชื่อมต่อกับหน้าจอหลัก (กรุณาเปิดผ่านระบบเช็คชื่อ)';
+                    msg.style.backgroundColor = '#b91c1c';
+                } else {
+                    msg.innerText = 'เปิดกล้องสำเร็จ กำลังดึงรายชื่อนักเรียน...';
+                    // ส่งสัญญาณบอกหน้าจอหลัก (Index.html) ว่ากล้องพร้อมรับรายชื่อแล้ว
+                    window.opener.postMessage({ action: 'scannerReady' }, '*');
+                }
+            } catch(e) { 
+                msg.innerText = 'ไม่สามารถเข้าถึงกล้องได้: ' + e.message; 
+                msg.style.backgroundColor = '#b91c1c';
             }
         }
-        init();
+
+        // ระบบรอรับฐานข้อมูลรายชื่อนักเรียนจากหน้าจอหลัก
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.action === 'loadFaceData') {
+                event.data.faces.forEach(f => nameMap.set(String(f.studentId).trim(), f.studentName));
+                msg.innerText = 'โหลดรายชื่อสำเร็จ ' + nameMap.size + ' คน พร้อมสแกน QR Code...';
+                msg.style.backgroundColor = '#0369a1';
+                
+                // เริ่มระบบลูปตรวจจับ QR Code
+                setInterval(scanQR, 400);
+            }
+        });
+
+        function scanQR() {
+            if (v.videoWidth === 0 || v.videoHeight === 0) return;
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = v.videoWidth; 
+            canvas.height = v.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(v, 0, 0);
+            
+            const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(data.data, data.width, data.height, { inversionAttempts: "attemptBoth" });
+            
+            if (code) {
+                const scannedId = code.data.trim();
+                
+                // ป้องกันการสแกนซ้ำคนเดิมรัวๆ ในวินาทีเดียวกัน
+                if (lastMatchedId === scannedId) return;
+                
+                // ดึงรายชื่อนักเรียนจากรหัสที่สแกนพบ
+                const studentName = nameMap.get(scannedId);
+                
+                if (studentName) {
+                    lastMatchedId = scannedId;
+                    
+                    // 1. ส่งคำสั่งเช็คชื่อกลับไปที่ระบบหลักหลังบ้าน (Index.html)
+                    if(window.opener) {
+                        window.opener.postMessage({action: 'faceMatched', studentId: scannedId}, '*');
+                    }
+                    
+                    // 2. แสดงสถานะสีเขียวพร้อม "ชื่อ-นามสกุลนักเรียน" บนหน้าจอทันที
+                    msg.innerText = '✅ เช็คชื่อสำเร็จ: ' + studentName;
+                    msg.style.backgroundColor = '#15803d';
+                    
+                    // หน่วงเวลา 2 วินาที ก่อนเคลียร์หน้าจอเพื่อรับคนต่อไป
+                    clearTimeout(matchTimeout);
+                    matchTimeout = setTimeout(() => {
+                        msg.innerText = 'สแกน QR Code คนต่อไป...';
+                        msg.style.backgroundColor = '#0369a1';
+                        lastMatchedId = '';
+                    }, 2000);
+                } else {
+                    // กรณีสแกนเจอบัตร QR อื่นๆ ที่ไม่มีรหัสในห้องเรียนนี้
+                    msg.innerText = '❌ ไม่พบรหัส ' + scannedId + ' ในรายวิชานี้';
+                    msg.style.backgroundColor = '#b91c1c';
+                }
+            }
+        }
+
+        // รันระบบกล้องทันทีที่เปิดหน้าเว็บ
+        initCamera();
     </script>
 </body>
 </html>
